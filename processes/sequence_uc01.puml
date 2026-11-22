@@ -1,0 +1,61 @@
+@startuml RoomBook-UC01-Sequence
+title UC-01 Создание брони: последовательность вызовов
+
+actor "Сотрудник" as User
+participant "Frontend" as FE
+participant "BookingService" as BS
+database "БД (PostgreSQL)" as DB
+participant "CalendarAdapter" as CA
+participant "Внешний календарь" as EXT
+queue "Очередь повторов" as RETRY
+
+User -> FE : выбрать слот, «Забронировать»
+FE -> BS : POST /v1/bookings\nIdempotency-Key: K\n{roomId, startTime, endTime}
+activate BS
+
+BS -> DB : SELECT booking\nWHERE idempotency_key = K
+DB --> BS : найденная бронь или пусто
+
+alt Повтор с тем же ключом
+  BS --> FE : 200 OK (ранее созданная бронь)
+  note right
+    Новая бронь не создаётся
+    (REQ-BOOK-003)
+  end note
+else Новый запрос
+  BS -> BS : валидация интервала\n(REQ-BOOK-006)
+  alt Интервал невалиден
+    BS --> FE : 422 Problem\n(application/problem+json)
+  else Интервал валиден
+    BS -> DB : BEGIN
+    BS -> DB : SELECT … FOR UPDATE\nпо комнате и периоду
+    DB --> BS : пересекающиеся CONFIRMED брони
+    alt Пересечение есть
+      BS -> DB : ROLLBACK
+      BS --> FE : 409 Problem (slot_taken)
+      note right
+        REQ-BOOK-002, AC-009
+      end note
+    else Пересечения нет
+      BS -> DB : INSERT booking\nstatus = CONFIRMED
+      BS -> DB : COMMIT
+      BS --> FE : 201 Created (booking)
+      BS ->> CA : publish(booking_created)\nасинхронно, без ожидания
+      activate CA
+      CA -> EXT : POST /events
+      alt Внешний календарь недоступен
+        CA -> RETRY : retry ≤ 3 (1/5/15 с)\nзатем в очередь
+        note right
+          бронь остаётся CONFIRMED
+          (REQ-INT-002, AC-023)
+        end note
+      else Успешно
+        EXT --> CA : 202 Accepted
+      end
+      deactivate CA
+    end
+  end
+end
+
+deactivate BS
+@enduml

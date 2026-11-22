@@ -1,0 +1,543 @@
+openapi: 3.0.3
+
+info:
+  title: RoomBook API
+  version: 1.0.0
+  description: |
+    Внутренний сервис бронирования переговорных комнат.
+
+    - Роли: `EMPLOYEE` (сотрудник), `ADMIN` (администратор).
+    - Время хранится и передаётся в UTC, отображается в Europe/Moscow.
+    - Рабочие часы 09:00–19:00 Europe/Moscow, шаг слотов 30 минут.
+    - Ошибки — `application/problem+json` (RFC 7807).
+    - `POST /bookings` идемпотентен по заголовку `Idempotency-Key`.
+  contact:
+    name: RoomBook team
+    email: team@roombook.example
+
+servers:
+  - url: https://api.roombook.example/v1
+    description: Production
+
+tags:
+  - name: Rooms
+    description: Справочник комнат и слоты
+  - name: Bookings
+    description: Брони сотрудника
+  - name: Admin
+    description: Административные операции
+
+security:
+  - bearerAuth: []
+
+paths:
+  /rooms:
+    get:
+      tags: [Rooms]
+      operationId: listRooms
+      summary: Список активных комнат
+      description: Возвращает только комнаты с `is_active = true`. Фильтры применяются одновременно.
+      parameters:
+        - name: capacity_min
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          example: 10
+        - name: q
+          in: query
+          required: false
+          description: Подстрока в перечне оборудования (без учёта регистра)
+          schema: { type: string, maxLength: 64 }
+          example: projector
+      responses:
+        '200':
+          description: Список комнат
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Room' }
+              examples:
+                twoRooms:
+                  summary: Две комнаты
+                  value:
+                    - id: 6f1a1a10-1111-4a11-9a11-000000000001
+                      name: Room-1
+                      capacity: 6
+                      equipment: [projector, whiteboard]
+                      is_active: true
+                    - id: 6f1a1a10-1111-4a11-9a11-000000000002
+                      name: Room-2
+                      capacity: 14
+                      equipment: [projector, video-conf]
+                      is_active: true
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /rooms/{roomId}/slots:
+    get:
+      tags: [Rooms]
+      operationId: listRoomSlots
+      summary: Слоты комнаты на дату
+      description: 20 слотов по 30 минут с 09:00 до 19:00 Europe/Moscow. Дата обязательна.
+      parameters:
+        - name: roomId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: '2026-12-01'
+      responses:
+        '200':
+          description: Слоты на дату
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Slot' }
+              examples:
+                twoSlots:
+                  summary: Свободный и занятый слот
+                  value:
+                    - start_time: '2026-12-01T06:00:00Z'
+                      end_time: '2026-12-01T06:30:00Z'
+                      status: free
+                    - start_time: '2026-12-01T06:30:00Z'
+                      end_time: '2026-12-01T07:00:00Z'
+                      status: busy
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /bookings:
+    post:
+      tags: [Bookings]
+      operationId: createBooking
+      summary: Создать бронь
+      description: |
+        Создаёт бронь сразу в статусе `CONFIRMED` (REQ-BOOK-001).
+        Повтор с тем же `Idempotency-Key` возвращает созданную ранее бронь (REQ-BOOK-003).
+        Пересечение с существующей CONFIRMED броней → 409 (REQ-BOOK-002).
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+          example: 7d444840-9dc0-11d1-b245-5ffdce74fad2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBookingRequest' }
+            examples:
+              create:
+                summary: Бронь на 30 минут
+                value:
+                  roomId: 6f1a1a10-1111-4a11-9a11-000000000001
+                  start_time: '2026-12-01T07:00:00Z'
+                  end_time: '2026-12-01T07:30:00Z'
+      responses:
+        '201':
+          description: Бронь создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+              examples:
+                created:
+                  value:
+                    id: 9b2f0c3e-2222-4b22-8b22-000000000001
+                    room:
+                      id: 6f1a1a10-1111-4a11-9a11-000000000001
+                      name: Room-1
+                    user_email: user@example.com
+                    start_time: '2026-12-01T07:00:00Z'
+                    end_time: '2026-12-01T07:30:00Z'
+                    status: CONFIRMED
+                    created_at: '2026-11-22T19:05:00Z'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /bookings/my:
+    get:
+      tags: [Bookings]
+      operationId: listMyBookings
+      summary: Мои брони
+      description: Возвращает брони текущего пользователя. Фильтры по статусу и периоду необязательны.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [CONFIRMED, CANCELLED] }
+          example: CONFIRMED
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Список броней
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Booking' }
+              examples:
+                oneBooking:
+                  value:
+                    - id: 9b2f0c3e-2222-4b22-8b22-000000000001
+                      room:
+                        id: 6f1a1a10-1111-4a11-9a11-000000000001
+                        name: Room-1
+                      user_email: user@example.com
+                      start_time: '2026-12-01T07:00:00Z'
+                      end_time: '2026-12-01T07:30:00Z'
+                      status: CONFIRMED
+                      created_at: '2026-11-22T19:05:00Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /bookings/{bookingId}/cancel:
+    patch:
+      tags: [Bookings]
+      operationId: cancelBooking
+      summary: Отменить бронь
+      description: |
+        EMPLOYEE может отменить только свою бронь и не позднее чем за 1 час до начала (REQ-BOOK-004).
+        ADMIN может отменить любую бронь в любое время (REQ-ADMIN-002).
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelBookingRequest' }
+            examples:
+              reason:
+                value:
+                  reason: Совещание перенесено
+      responses:
+        '200':
+          description: Бронь отменена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Booking' }
+              examples:
+                cancelled:
+                  value:
+                    id: 9b2f0c3e-2222-4b22-8b22-000000000001
+                    room:
+                      id: 6f1a1a10-1111-4a11-9a11-000000000001
+                      name: Room-1
+                    user_email: user@example.com
+                    start_time: '2026-12-01T07:00:00Z'
+                    end_time: '2026-12-01T07:30:00Z'
+                    status: CANCELLED
+                    created_at: '2026-11-22T19:05:00Z'
+                    cancelled_at: '2026-11-22T19:20:00Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /admin/rooms:
+    post:
+      tags: [Admin]
+      operationId: createRoom
+      summary: Создать комнату
+      description: Доступно только роли ADMIN (REQ-ADMIN-001, REQ-AUTH-003).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRoomRequest' }
+            examples:
+              newRoom:
+                value:
+                  name: Room-3
+                  capacity: 8
+                  equipment: [whiteboard]
+      responses:
+        '201':
+          description: Комната создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Room' }
+              examples:
+                created:
+                  value:
+                    id: 6f1a1a10-1111-4a11-9a11-000000000003
+                    name: Room-3
+                    capacity: 8
+                    equipment: [whiteboard]
+                    is_active: true
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /admin/reports/load:
+    get:
+      tags: [Admin]
+      operationId: getLoadReport
+      summary: CSV-отчёт по загрузке
+      description: |
+        Отчёт по комнатам за период: число броней и занятых часов (REQ-REPORT-001).
+        Период не может быть длиннее 366 дней (REQ-REPORT-002).
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: '2026-11-01'
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: '2026-12-01'
+      responses:
+        '200':
+          description: CSV-файл
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              example: attachment; filename="roomload-2026-11-01_2026-12-01.csv"
+          content:
+            text/csv:
+              schema: { type: string }
+              examples:
+                csv:
+                  summary: Пример содержимого
+                  value: |
+                    room;bookings;busy_hours
+                    Room-1;12;8.5
+                    Room-2;4;3.0
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT сотрудника или администратора (срок жизни ≤ 8 часов)
+
+  schemas:
+    Room:
+      type: object
+      required: [id, name, capacity, equipment, is_active]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 120, example: Room-1 }
+        capacity: { type: integer, minimum: 1, example: 6 }
+        equipment:
+          type: array
+          items: { type: string }
+          example: [projector, whiteboard]
+        is_active: { type: boolean, example: true }
+
+    Slot:
+      type: object
+      required: [start_time, end_time, status]
+      properties:
+        start_time: { type: string, format: date-time, example: '2026-12-01T06:00:00Z' }
+        end_time: { type: string, format: date-time, example: '2026-12-01T06:30:00Z' }
+        status: { type: string, enum: [free, busy], example: free }
+
+    CreateBookingRequest:
+      type: object
+      required: [roomId, start_time, end_time]
+      properties:
+        roomId: { type: string, format: uuid }
+        start_time:
+          type: string
+          format: date-time
+          description: Начало интервала, UTC. Кратно 30 минутам, внутри 09:00–19:00 Europe/Moscow.
+          example: '2026-12-01T07:00:00Z'
+        end_time:
+          type: string
+          format: date-time
+          description: Конец интервала, UTC. Строго больше start_time.
+          example: '2026-12-01T07:30:00Z'
+
+    CancelBookingRequest:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 200, example: Совещание перенесено }
+
+    Booking:
+      type: object
+      required: [id, room, user_email, start_time, end_time, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        room:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+        user_email: { type: string, format: email, example: user@example.com }
+        start_time: { type: string, format: date-time }
+        end_time: { type: string, format: date-time }
+        status: { type: string, enum: [CONFIRMED, CANCELLED] }
+        created_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+
+    CreateRoomRequest:
+      type: object
+      required: [name, capacity]
+      properties:
+        name: { type: string, maxLength: 120, minLength: 1 }
+        capacity: { type: integer, minimum: 1, maximum: 200 }
+        equipment:
+          type: array
+          items: { type: string }
+          example: [whiteboard]
+
+    LoadReportMeta:
+      type: object
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        rooms: { type: integer, minimum: 0 }
+        generated_at: { type: string, format: date-time }
+
+    Problem:
+      type: object
+      description: Ошибка в формате RFC 7807
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri, example: 'https://api.roombook.example/problems/slot-taken' }
+        title: { type: string, example: Slot is already booked }
+        status: { type: integer, example: 409 }
+        detail: { type: string, example: 'Room-1 10:00–11:00 уже забронирована' }
+        instance: { type: string, format: uri, example: '/v1/bookings' }
+
+  responses:
+    BadRequest:
+      description: Отсутствует обязательный заголовок или тело запроса
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            missingKey:
+              value:
+                type: 'https://api.roombook.example/problems/missing-idempotency-key'
+                title: Idempotency-Key header is required
+                status: 400
+                detail: 'Заголовок Idempotency-Key обязателен для POST /bookings'
+                instance: '/v1/bookings'
+
+    Unauthorized:
+      description: Нет или истёк JWT
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            unauthorized:
+              value:
+                type: 'https://api.roombook.example/problems/unauthorized'
+                title: Authentication required
+                status: 401
+                detail: 'Токен отсутствует или истёк'
+                instance: '/v1/bookings'
+
+    Forbidden:
+      description: Недостаточно прав (роль или чужой ресурс)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            forbidden:
+              value:
+                type: 'https://api.roombook.example/problems/forbidden'
+                title: Access denied
+                status: 403
+                detail: 'Отменить чужую бронь может только администратор'
+                instance: '/v1/bookings/9b2f0c3e-2222-4b22-8b22-000000000001/cancel'
+
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            notFound:
+              value:
+                type: 'https://api.roombook.example/problems/not-found'
+                title: Resource not found
+                status: 404
+                detail: 'Бронь не найдена'
+                instance: '/v1/bookings/00000000-0000-0000-0000-000000000000/cancel'
+
+    Conflict:
+      description: Конфликт состояния (пересечение слотов или поздняя отмена)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            slotTaken:
+              value:
+                type: 'https://api.roombook.example/problems/slot-taken'
+                title: Slot is already booked
+                status: 409
+                detail: 'Room-1 10:00–11:00 уже забронирована'
+                instance: '/v1/bookings'
+            cancelTooLate:
+              value:
+                type: 'https://api.roombook.example/problems/cancel-too-late'
+                title: Cancellation window is over
+                status: 409
+                detail: 'Отмена возможна не позднее чем за 1 час до начала'
+                instance: '/v1/bookings/9b2f0c3e-2222-4b22-8b22-000000000001/cancel'
+
+    UnprocessableEntity:
+      description: Нарушены правила предметной области или период отчёта
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            invalidInterval:
+              value:
+                type: 'https://api.roombook.example/problems/invalid-time-range'
+                title: Invalid booking interval
+                status: 422
+                detail: 'Начало должно быть кратно 30 минутам и внутри 09:00–19:00 Europe/Moscow'
+                instance: '/v1/bookings'
+            invalidPeriod:
+              value:
+                type: 'https://api.roombook.example/problems/invalid-period'
+                title: Invalid report period
+                status: 422
+                detail: 'from больше to или период длиннее 366 дней'
+                instance: '/v1/admin/reports/load'
+
+    InternalError:
+      description: Непредвиденная ошибка сервера
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            internal:
+              value:
+                type: 'https://api.roombook.example/problems/internal-error'
+                title: Internal server error
+                status: 500
+                detail: 'Обратитесь к администратору, идентификатор события: abc-123'
+                instance: '/v1/bookings'

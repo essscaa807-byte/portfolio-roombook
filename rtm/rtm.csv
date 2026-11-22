@@ -1,0 +1,21 @@
+REQ_ID;Источник;Компонент;AC_ID;Артефакт
+REQ-AUTH-001;UC-01 (предусловие);AuthService;AC-001;srs/srs.md#4.1
+REQ-AUTH-002;REQ-AUTH-001;AuthService;AC-002;srs/srs.md#4.1
+REQ-AUTH-003;Ограничения MVP (роли);AuthService;AC-003;srs/srs.md#4.1
+REQ-VIEW-001;UC-01 (выбор комнаты);RoomService;"AC-004; AC-005";srs/srs.md#4.2
+REQ-VIEW-002;UC-01 (выбор слота);SlotService;AC-006;srs/srs.md#4.2
+REQ-VIEW-003;NFR-DATA-001;TimeBoundary;AC-007;srs/srs.md#4.2
+REQ-BOOK-001;UC-01;BookingService;AC-008;srs/srs.md#4.3
+REQ-BOOK-002;UC-01 A1;BookingService;"AC-009; AC-010";srs/srs.md#4.3
+REQ-BOOK-003;Повторные отправки (сеть);IdempotencyStore;"AC-011; AC-012";srs/srs.md#4.3
+REQ-BOOK-004;UC-02;BookingService;"AC-013; AC-014; AC-015";srs/srs.md#4.3
+REQ-BOOK-005;UC-02 (контекст);BookingService;AC-016;srs/srs.md#4.3
+REQ-BOOK-006;UC-01 (валидация);ValidationLayer;"AC-017; AC-018";srs/srs.md#4.3
+REQ-ADMIN-001;Цель «самообслуживание»;RoomService;AC-019;srs/srs.md#4.4
+REQ-ADMIN-002;UC-02 (ADMIN);BookingService;AC-020;srs/srs.md#4.4
+REQ-ADMIN-003;Цель «порядок в справочнике»;RoomService;AC-021;srs/srs.md#4.4
+REQ-INT-001;UC-01 шаг 4;CalendarAdapter;AC-022;srs/srs.md#4.5
+REQ-INT-002;UC-01 A3;CalendarAdapter;AC-023;srs/srs.md#4.5
+REQ-INT-003;UC-02 шаг 3;CalendarAdapter;AC-024;srs/srs.md#4.5
+REQ-REPORT-001;Цель «прозрачная загрузка»;ReportService;AC-025;srs/srs.md#4.6
+REQ-REPORT-002;REQ-REPORT-001;ReportService;AC-026;srs/srs.md#4.6
